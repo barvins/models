@@ -12,8 +12,17 @@ Changes done to deeplab model:
     * random blur
     * random crop that assumes that dataset is generated so that there is always enough margin in image to not cut off parts of important objects
 * pre and postprocessing layers can be cut off when exporting models, to get rid of operations not supported by TensorRT and Tensorflow Lite
-`* ResizeBilinear layers are replaced with ResizeNearestneighbor, since there is no real difference in quality and nearst neighbor is easier to implement in CUDA, since TensorRT does not support resize layers.
+* ResizeBilinear layers are replaced with ResizeNearestneighbor, since there is no real difference in quality and nearst neighbor is easier to implement in CUDA, since TensorRT does not support resize layers.
 
+
+
+
+
+
+
+
+
+--------------------------------------------------------------
 
 This repository contains a number of different models implemented in [TensorFlow](https://www.tensorflow.org):
 
