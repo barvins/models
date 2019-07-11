@@ -2,17 +2,20 @@
 
 Changes done to deeplab model:
 * Allow to train multiple classes per pixel, makes it suitable not only for segmentation but also for keypoint detection.
-* Custom random data augmentation:
-    * removed zoom since tensorflow's downsalmpling distorts fine details in images like nets. It was easier to provide different zoom levels in generated dataset than to implement proper resizing method in tensorflow.
-    * random gamma
-    * random contrast/brightness that does not go outside of min/max pixel value range
-    * random light color
-    * random hue in really wide range, we don't care about blue human faces, but want t-shirts to be in every possible color
-    * random blur
-    * random crop that assumes that dataset is generated so that there is always enough margin in image to not cut off parts of important objects
-    * ability to switch labels when doing ranfom flip (for some labels orientation matters)
 * pre and postprocessing layers can be cut off when exporting models, to get rid of operations not supported by TensorRT and Tensorflow Lite
 * ResizeBilinear layers are replaced with ResizeNearestneighbor, since there is no real difference in quality and nearst neighbor is easier to implement in CUDA, since TensorRT does not support resize layers.
+
+
+
+Object detection and deeplab models both have custom image augmentation:
+* removed zoom since tensorflow's downsalmpling distorts fine details in images like nets. It was easier to provide different zoom levels in generated dataset than to implement proper resizing method in tensorflow.
+* random crop that assumes that dataset is generated so that there is always enough margin in image to not cut off parts of important objects
+* random gamma
+* random contrast/brightness that does not go outside of min/max pixel value range
+* random light color
+* random hue in really wide range, we don't care about blue human faces, but want t-shirts to be in every possible color
+* random blur
+* ability to switch labels when doing ranfom flip (for some labels orientation matters)
 
 
 
