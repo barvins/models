@@ -11,6 +11,7 @@ Changes done to deeplab model:
     * random hue in really wide range, we don't care about blue human faces, but want t-shirts to be in every possible color
     * random blur
     * random crop that assumes that dataset is generated so that there is always enough margin in image to not cut off parts of important objects
+    * ability to switch labels when doing ranfom flip (for some labels orientation matters)
 * pre and postprocessing layers can be cut off when exporting models, to get rid of operations not supported by TensorRT and Tensorflow Lite
 * ResizeBilinear layers are replaced with ResizeNearestneighbor, since there is no real difference in quality and nearst neighbor is easier to implement in CUDA, since TensorRT does not support resize layers.
 
