@@ -59,7 +59,9 @@ FLAGS = flags.FLAGS
 def main(unused_argv):
   flags.mark_flag_as_required('model_dir')
   flags.mark_flag_as_required('pipeline_config_path')
-  config = tf.estimator.RunConfig(model_dir=FLAGS.model_dir)
+  session_config = tf.ConfigProto()
+  session_config.gpu_options.allow_growth = True #per_process_gpu_memory=0.9
+  config = tf.estimator.RunConfig(model_dir=FLAGS.model_dir, session_config=session_config, save_summary_steps=10, save_checkpoints_steps=100, keep_checkpoint_max=10, keep_checkpoint_every_n_hours=0.5)
 
   train_and_eval_dict = model_lib.create_estimator_and_inputs(
       run_config=config,

@@ -345,4 +345,8 @@ def build(preprocessor_step_config):
       kwargs['random_coef'] = [op.random_coef for op in config.operations]
     return (preprocessor.ssd_random_crop_pad_fixed_aspect_ratio, kwargs)
 
+  if step_type == 'random_as_toms_likes_it':
+    config = preprocessor_step_config.random_as_toms_likes_it
+    return (preprocessor.random_as_toms_likes_it, {"width":config.width, "height":config.height})
+
   raise ValueError('Unknown preprocessing step.')

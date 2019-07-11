@@ -53,6 +53,14 @@ MODEL_BUILD_UTIL_MAP = {
         inputs.create_predict_input_fn,
 }
 
+class LogHistogramHook(tf.train.SessionRunHook):
+  def begin(self):
+    for model_var in tf.global_variables():
+      tf.summary.histogram(model_var.op.name, model_var)
+
+    for model_var in tf.local_variables():
+      tf.summary.histogram(model_var.op.name, model_var)
+
 
 def _prepare_groundtruth_for_eval(detection_model, class_agnostic,
                                   max_number_of_boxes):
@@ -201,6 +209,7 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False):
   eval_input_config = configs['eval_input_config']
   eval_config = configs['eval_config']
 
+
   def model_fn(features, labels, mode, params=None):
     """Constructs the object detection model.
 
@@ -270,6 +279,10 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False):
           groundtruth_is_crowd_list=gt_is_crowd_list)
 
     preprocessed_images = features[fields.InputDataFields.image]
+    #remove when not debugging preprocess
+    image_with_boxes = tf.image.draw_bounding_boxes(tf.expand_dims(features[fields.InputDataFields.image][0], axis=0), tf.expand_dims(labels[fields.InputDataFields.groundtruth_boxes][0], axis =0))
+    tf.summary.image("train_input", image_with_boxes, 2)
+
     if use_tpu and train_config.use_bfloat16:
       with tf.contrib.tpu.bfloat16_scope():
         prediction_dict = detection_model.predict(
@@ -482,7 +495,8 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False):
           train_op=train_op,
           eval_metric_ops=eval_metric_ops,
           export_outputs=export_outputs,
-          scaffold=scaffold)
+          scaffold=scaffold,
+          training_hooks=[LogHistogramHook()])
 
   return model_fn
 
@@ -699,13 +713,15 @@ def create_train_and_eval_specs(train_input_fn,
         tf.estimator.EvalSpec(
             name=eval_spec_name,
             input_fn=eval_input_fn,
-            steps=None,
-            exporters=exporter))
+            steps=100,
+            exporters=exporter,
+            start_delay_secs=0,
+            throttle_secs=0))
 
   if eval_on_train_data:
     eval_specs.append(
         tf.estimator.EvalSpec(
-            name='eval_on_train', input_fn=eval_on_train_input_fn, steps=None))
+            name='eval_on_train', input_fn=eval_on_train_input_fn, steps=100, start_delay_secs=0, throttle_secs=0))
 
   return train_spec, eval_specs
 

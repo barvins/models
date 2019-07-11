@@ -34,6 +34,7 @@ message PreprocessingStep {
     RandomRotation90 random_rotation90 = 26;
     RGBtoGray rgb_to_gray = 27;
     ConvertClassLogitsToSoftmax convert_class_logits_to_softmax = 28;
+    RandomAsTomsLikesIt random_as_toms_likes_it = 29;
   }
 }
 
@@ -439,3 +440,11 @@ message ConvertClassLogitsToSoftmax {
   // Scale to use on logits before applying softmax.
   optional float temperature = 1 [default=1.0];
 }
+
+
+message RandomAsTomsLikesIt {
+  optional int32 width = 1 [default=480];
+  optional int32 height = 2 [default=272];
+}
+
+

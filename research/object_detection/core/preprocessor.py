@@ -864,6 +864,113 @@ def random_rgb_to_gray(image,
 
   return image
 
+def gaussian_kernel(size, mean, std):
+    d = tf.distributions.Normal(mean, std)
+    vals = d.prob(tf.range(start = -size, limit = size + 1, dtype = tf.float32))
+    gauss_kernel = tf.einsum('i,j->ij', vals, vals)
+    gauss_kernel =  gauss_kernel / tf.reduce_sum(gauss_kernel)
+    gauss_kernel = gauss_kernel[:,:,tf.newaxis, tf.newaxis]
+    return gauss_kernel
+
+
+def gaussian_blur(gauss_image):
+    gauss_kernel = gaussian_kernel(3, 127.5, 127.5)
+    gauss_image = tf.expand_dims(gauss_image,0)
+    r,g,b = tf.split(gauss_image,3,3)
+    r = tf.nn.conv2d(r, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    g = tf.nn.conv2d(g, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    b = tf.nn.conv2d(b, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    r = tf.squeeze(r,3)
+    g = tf.squeeze(g,3)
+    b = tf.squeeze(b,3)
+    gauss_image = tf.stack([r,g,b],3)
+    gauss_image = tf.squeeze(gauss_image, 0)
+    return gauss_image
+
+
+def random_as_toms_likes_it(
+    image,
+    boxes,
+    labels,
+    keypoints=None,
+    width=None,
+    height=None
+    ):
+
+    crop_width=width
+    crop_height=height
+    #random crop
+    random_top =  tf.cond(
+      tf.shape(image)[0] > crop_height,
+      lambda: tf.random_uniform([1], 0, tf.shape(image)[0] - crop_height, tf.int32)[0],
+      lambda: 0)
+
+    random_left =  tf.cond(
+      tf.shape(image)[1] > crop_width,
+      lambda: tf.random_uniform([1], 0, tf.shape(image)[1] - crop_width, tf.int32)[0],
+      lambda: 0)
+
+    old_height = tf.shape(image)[0]
+    old_width = tf.shape(image)[1]
+
+    processed_image = tf.image.crop_to_bounding_box(image, random_top, random_left, tf.minimum(crop_height, tf.shape(image)[0]), tf.minimum(crop_width, tf.shape(image)[1]))
+
+    new_height = tf.shape(processed_image)[0]
+    new_width = tf.shape(processed_image)[1]
+
+    boxes *= [old_height, old_width, old_height, old_width]
+    boxes -= [random_top, random_left, random_top, random_left]
+    boxes /= [new_height, new_width, new_height, new_width]
+    #processed_image = tf.image.draw_bounding_boxes(tf.expand_dims(processed_image,axis=0), tf.expand_dims(boxes, axis=0))
+
+    #random_gamma (tf.image.adjust_gamma doesn't work right)
+    random_gamma = 1.0 / tf.random_uniform([1],0.4, 1.6)[0]
+    processed_image = (processed_image / 255.0) ** random_gamma * 255.0
+
+    #random hue
+    processed_image = tf.image.random_hue(processed_image, 0.5)
+
+    #random_light_color
+    processed_image *= [tf.random_uniform([1],0.8, 1.2)[0], tf.random_uniform([1],0.8, 1.2)[0], tf.random_uniform([1],0.8, 1.2)[0]]
+
+    #random contrast & brightness:
+    #tensorflow random_brightness is doing it seperately for each channel
+    #i want the same transformation for all channels
+    #first do the contrast, then do brightness trying to fit in 0-255 range and not clip
+    grayscale = tf.reduce_sum(processed_image * [0.299, .587, .114], axis=2)
+    mean = tf.reduce_mean(grayscale)
+    min = tf.reduce_min(grayscale)
+    max = tf.reduce_max(grayscale)
+    random_contrast = tf.random_uniform([1],0.7, 1.1) #bias to lower contrast (more similar to real data)
+    brightness_min = -(mean - ((mean - min) * random_contrast))
+    brightness_max = 255.0 - ((max - mean) * random_contrast + mean)
+    random_brightness = tf.random_uniform([1],brightness_min, brightness_max)
+    processed_image -= [mean, mean, mean]
+    processed_image *= [random_contrast[0], random_contrast[0], random_contrast[0]]
+    processed_image += [mean + random_brightness[0], mean + random_brightness[0], mean + random_brightness[0]]
+
+    #random blur every 10th sample
+    processed_image = tf.cond(
+      tf.greater(tf.random_uniform([1],0, 1)[0], 0.1),
+      lambda: processed_image,
+      lambda: gaussian_blur(processed_image)
+    )
+
+    #there won't be overflows in real life
+    processed_image = tf.clip_by_value(processed_image, 0.0, 255.0)
+
+
+    result = [processed_image, boxes, labels]
+    if keypoints is not None:
+        #move keypoints according to crop
+        new_keypoints = keypoints
+        new_keypoints *= [old_height, old_width]
+        new_keypoints -= [random_top, random_left]
+        new_keypoints /= [new_height, new_width]
+        result.append(new_keypoints)
+    return tuple(result)
+
+
 
 def random_adjust_brightness(image,
                              max_delta=0.2,
@@ -3223,6 +3330,10 @@ def get_default_func_arg_map(include_label_weights=True,
           groundtruth_keypoints,
       ),
       convert_class_logits_to_softmax: (multiclass_scores,),
+      random_as_toms_likes_it: (fields.InputDataFields.image,
+                        fields.InputDataFields.groundtruth_boxes,
+                        fields.InputDataFields.groundtruth_classes,
+                        groundtruth_keypoints),
   }
 
   return prep_func_arg_map
