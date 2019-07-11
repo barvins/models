@@ -1,6 +1,5 @@
-# TensorFlow Models
+# Barvins fork of TensorFlow Models
 
-Barvins fork of tensorflow models.
 Changes done to deeplab model:
 * Allow to train multiple classes per pixel, makes it suitable not only for segmentation but also for keypoint detection.
 * Custom random data augmentation:
@@ -14,9 +13,6 @@ Changes done to deeplab model:
     * ability to switch labels when doing ranfom flip (for some labels orientation matters)
 * pre and postprocessing layers can be cut off when exporting models, to get rid of operations not supported by TensorRT and Tensorflow Lite
 * ResizeBilinear layers are replaced with ResizeNearestneighbor, since there is no real difference in quality and nearst neighbor is easier to implement in CUDA, since TensorRT does not support resize layers.
-
-
-
 
 
 
