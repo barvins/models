@@ -81,6 +81,15 @@ flags.DEFINE_enum('learning_policy', 'poly', ['poly', 'step'],
 flags.DEFINE_float('base_learning_rate', .0001,
                    'The base learning rate for model training.')
 
+flags.DEFINE_float('batch_norm_decay', .9997,
+                   'Batch norm decay.')
+
+flags.DEFINE_float('batch_norm_epsilon', .00001,
+                   'Batch norm epsilon.')
+
+flags.DEFINE_float('feature_extractor_batch_norm_decay', .9997,
+                   'Batch norm decay.')
+
 flags.DEFINE_float('learning_rate_decay_factor', 0.1,
                    'The rate to decay the base learning rate.')
 
@@ -192,6 +201,9 @@ def _build_deeplab(inputs_queue, outputs_to_num_classes, ignore_label):
       samples[common.IMAGE], name=common.IMAGE)
   samples[common.LABEL] = tf.identity(
       samples[common.LABEL], name=common.LABEL)
+  if FLAGS.use_multichannel:
+      samples[common.LABELS_MULTICHANNEL] = tf.identity(
+          samples[common.LABELS_MULTICHANNEL], name=common.LABELS_MULTICHANNEL)
 
   model_options = common.ModelOptions(
       outputs_to_num_classes=outputs_to_num_classes,
@@ -204,7 +216,10 @@ def _build_deeplab(inputs_queue, outputs_to_num_classes, ignore_label):
       image_pyramid=FLAGS.image_pyramid,
       weight_decay=FLAGS.weight_decay,
       is_training=True,
-      fine_tune_batch_norm=FLAGS.fine_tune_batch_norm)
+      fine_tune_batch_norm=FLAGS.fine_tune_batch_norm,
+      batch_norm_decay=FLAGS.batch_norm_decay,
+      batch_norm_epsilon=FLAGS.batch_norm_epsilon,
+      feature_extractor_batch_norm_decay=FLAGS.feature_extractor_batch_norm_decay)
 
   # Add name to graph node so we can add to summary.
   output_type_dict = outputs_to_scales_to_logits[common.OUTPUT_TYPE]
@@ -220,7 +235,8 @@ def _build_deeplab(inputs_queue, outputs_to_num_classes, ignore_label):
         ignore_label,
         loss_weight=1.0,
         upsample_logits=FLAGS.upsample_logits,
-        scope=output)
+        scope=output,
+        labels_multichannel=samples[common.LABELS_MULTICHANNEL] if common.LABELS_MULTICHANNEL in samples else None)
 
   return outputs_to_scales_to_logits
 
@@ -272,6 +288,7 @@ def main(unused_argv):
 
       # Define the model and create clones.
       model_fn = _build_deeplab
+
       model_args = (inputs_queue, {
           common.OUTPUT_TYPE: dataset.num_classes
       }, dataset.ignore_label)
@@ -286,8 +303,9 @@ def main(unused_argv):
     summaries = set(tf.get_collection(tf.GraphKeys.SUMMARIES))
 
     # Add summaries for model variables.
-    for model_var in slim.get_model_variables():
-      summaries.add(tf.summary.histogram(model_var.op.name, model_var))
+    # Already added somewhere else, do not duplicate
+    #for model_var in slim.get_model_variables():
+    #  summaries.add(tf.summary.histogram(model_var.op.name, model_var))
 
     # Add summaries for images, labels, semantic predictions
     if FLAGS.save_summaries_images:
@@ -301,8 +319,20 @@ def main(unused_argv):
       # Scale up summary image pixel values for better visualization.
       pixel_scaling = max(1, 255 // dataset.num_classes)
       summary_label = tf.cast(first_clone_label * pixel_scaling, tf.uint8)
+
       summaries.add(
           tf.summary.image('samples/%s' % common.LABEL, summary_label))
+
+
+      if FLAGS.use_multichannel:
+        first_clone_labels = graph.get_tensor_by_name(
+          ('%s/%s:0' % (first_clone_scope, common.LABELS_MULTICHANNEL)).strip('/'))
+        summary_labels = tf.expand_dims(tf.transpose(first_clone_labels, [3,0,1,2]), axis=4)
+
+        for class_id in range(FLAGS.num_classes):
+          summaries.add(
+              tf.summary.image('samples/%s_%i' % (common.LABELS_MULTICHANNEL, class_id), summary_labels[class_id]))
+
 
       first_clone_output = graph.get_tensor_by_name(
           ('%s/%s:0' % (first_clone_scope, common.OUTPUT_TYPE)).strip('/'))
@@ -312,6 +342,24 @@ def main(unused_argv):
       summaries.add(
           tf.summary.image(
               'samples/%s' % common.OUTPUT_TYPE, summary_predictions))
+
+      if FLAGS.use_multichannel:
+        predictions = tf.cast(255 * (tf.exp(first_clone_output) / (1 + tf.exp(first_clone_output))), tf.uint8)
+        summary_predictions = tf.expand_dims(tf.transpose(predictions, [3,0,1,2]), axis=4)
+        for class_id in range(FLAGS.num_classes):
+          summaries.add(
+            tf.summary.image('samples/output_channel_%i' % (class_id), summary_predictions[class_id]))
+
+
+
+
+    if FLAGS.quantize:
+      tf.logging.info("Rewrite model for quantization")
+      tf.contrib.quantize.create_training_graph(graph, quant_delay=0)
+      for var_name in [n.name for n in tf.get_default_graph().as_graph_def().node]:
+        tf.logging.info(var_name)
+    else:
+      tf.logging.info("Do not quantize")
 
     # Add summaries for losses.
     for loss in tf.get_collection(tf.GraphKeys.LOSSES, first_clone_scope):
@@ -346,6 +394,7 @@ def main(unused_argv):
         grads_and_vars = slim.learning.multiply_gradients(
             grads_and_vars, grad_mult)
 
+
       # Create gradient update op.
       grad_updates = optimizer.apply_gradients(
           grads_and_vars, global_step=global_step)
@@ -353,6 +402,8 @@ def main(unused_argv):
       update_op = tf.group(*update_ops)
       with tf.control_dependencies([update_op]):
         train_tensor = tf.identity(total_loss, name='train_op')
+
+
 
     # Add the summaries from the first clone. These contain the summaries
     # created by model_fn and either optimize_clones() or _gather_clone_loss().
@@ -365,6 +416,8 @@ def main(unused_argv):
     # Soft placement allows placing on CPU ops without GPU implementation.
     session_config = tf.ConfigProto(
         allow_soft_placement=True, log_device_placement=False)
+    session_config.gpu_options.allow_growth = True
+
 
     # Start the training.
     slim.learning.train(
@@ -389,6 +442,6 @@ def main(unused_argv):
 
 if __name__ == '__main__':
   flags.mark_flag_as_required('train_logdir')
-  flags.mark_flag_as_required('tf_initial_checkpoint')
+  #flags.mark_flag_as_required('tf_initial_checkpoint')
   flags.mark_flag_as_required('dataset_dir')
   tf.app.run()

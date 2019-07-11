@@ -91,6 +91,32 @@ flags.DEFINE_string(
     '',
     'A JSON file that specifies the dense prediction cell.')
 
+flags.DEFINE_boolean('quantize', False,
+                     'Quantization aware training.')
+
+flags.DEFINE_boolean('input_floats', False,
+                     'Input is float32 array with values -1 to 1')
+
+flags.DEFINE_multi_integer(
+    'left_labels', None,'Left orientation labels to be exchanged with right labels when flipping image')
+
+flags.DEFINE_multi_integer(
+    'right_labels', None,'Right orientation labels to be exchanged with left labels when flipping image')
+
+flags.DEFINE_integer(
+    'num_classes', 7,'Number of classes')
+
+flags.DEFINE_boolean('use_multichannel', False,
+                     'each pixel can be marked with multiple labels.')
+
+
+
+
+
+
+
+
+
 FLAGS = flags.FLAGS
 
 # Constants
@@ -106,6 +132,7 @@ WIDTH = 'width'
 IMAGE_NAME = 'image_name'
 LABEL = 'label'
 ORIGINAL_IMAGE = 'original_image'
+LABELS_MULTICHANNEL = 'labels_multichannel'
 
 # Test set name.
 TEST_SET = 'test'

@@ -56,7 +56,11 @@ def _get_data(data_provider, dataset_split):
   if dataset_split != common.TEST_SET:
     label, = data_provider.get([common.LABELS_CLASS])
 
-  return image, label, image_name, height, width
+  labels_multichannel = None
+  if common.LABELS_MULTICHANNEL in data_provider.list_items():
+    labels_multichannel = data_provider.get([common.LABELS_MULTICHANNEL])
+
+  return image, label, image_name, height, width, labels_multichannel
 
 
 def get(dataset,
@@ -119,8 +123,17 @@ def get(dataset,
       num_readers=num_readers,
       num_epochs=None if is_training else 1,
       shuffle=is_training)
-  image, label, image_name, height, width = _get_data(data_provider,
+  image, label, image_name, height, width, labels_multichannel = _get_data(data_provider,
                                                       dataset_split)
+
+  #convert from batch x class x height x width x 1
+  #to height x width x class
+  if labels_multichannel is not None:
+    labels_multichannel = tf.squeeze(labels_multichannel)
+    labels_multichannel = tf.transpose(labels_multichannel, perm=[1,2,0])
+
+  #image = tf.Print(image, [tf.shape(image), tf.shape(label), tf.shape(labels_multichannel), labels_multichannel], 'labels', summarize=99999)
+
   if label is not None:
     if label.shape.ndims == 2:
       label = tf.expand_dims(label, 2)
@@ -129,9 +142,9 @@ def get(dataset,
     else:
       raise ValueError('Input label shape must be [height, width], or '
                        '[height, width, 1].')
-
     label.set_shape([None, None, 1])
-  original_image, image, label = input_preprocess.preprocess_image_and_label(
+
+  original_image, image, label, labels_multichannel = input_preprocess.preprocess_image_and_label(
       image,
       label,
       crop_height=crop_size[0],
@@ -142,17 +155,23 @@ def get(dataset,
       min_scale_factor=min_scale_factor,
       max_scale_factor=max_scale_factor,
       scale_factor_step_size=scale_factor_step_size,
-      ignore_label=dataset.ignore_label,
+      background_label=dataset.background_label,
       is_training=is_training,
-      model_variant=model_variant)
+      model_variant=model_variant,
+      labels_multichannel=labels_multichannel)
+
   sample = {
       common.IMAGE: image,
       common.IMAGE_NAME: image_name,
       common.HEIGHT: height,
       common.WIDTH: width
   }
+
   if label is not None:
     sample[common.LABEL] = label
+
+  if labels_multichannel is not None:
+    sample[common.LABELS_MULTICHANNEL] = labels_multichannel
 
   if not is_training:
     # Original image is only used during visualization.

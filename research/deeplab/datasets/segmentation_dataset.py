@@ -58,6 +58,8 @@ dataset = slim.dataset
 
 tfexample_decoder = slim.tfexample_decoder
 
+FLAGS = tf.app.flags.FLAGS
+
 
 _ITEMS_TO_DESCRIPTIONS = {
     'image': 'A color image of varying height and width.',
@@ -73,7 +75,8 @@ DatasetDescriptor = collections.namedtuple(
                       # class (if exists). For example, there are 20
                       # foreground classes + 1 background class in the PASCAL
                       # VOC 2012 dataset. Thus, we set num_classes=21.
-     'ignore_label',  # Ignore label value.
+     'ignore_label',  # Ignore label value. Used to remove border label that is used in some datasets.
+     'background_label' #label for padding images that don't fit
     ]
 )
 
@@ -84,6 +87,7 @@ _CITYSCAPES_INFORMATION = DatasetDescriptor(
     },
     num_classes=19,
     ignore_label=255,
+    background_label=0
 )
 
 _PASCAL_VOC_SEG_INFORMATION = DatasetDescriptor(
@@ -95,7 +99,28 @@ _PASCAL_VOC_SEG_INFORMATION = DatasetDescriptor(
     },
     num_classes=21,
     ignore_label=255,
+    background_label=0
 )
+
+_GOAL_INFORMATION = DatasetDescriptor(
+    splits_to_sizes={
+        'train': 39360
+    },
+    num_classes=6,
+    ignore_label=255,
+    background_label=0
+)
+
+_POSE_INFORMATION = DatasetDescriptor(
+    splits_to_sizes={
+        'train': 34350
+    },
+    num_classes=4,
+    ignore_label=255,
+    background_label=0
+)
+
+
 
 # These number (i.e., 'train'/'test') seems to have to be hard coded
 # You are required to figure it out for your training/testing example.
@@ -106,6 +131,7 @@ _ADE20K_INFORMATION = DatasetDescriptor(
     },
     num_classes=151,
     ignore_label=0,
+    background_label=0
 )
 
 
@@ -113,6 +139,8 @@ _DATASETS_INFORMATION = {
     'cityscapes': _CITYSCAPES_INFORMATION,
     'pascal_voc_seg': _PASCAL_VOC_SEG_INFORMATION,
     'ade20k': _ADE20K_INFORMATION,
+    'goal': _GOAL_INFORMATION,
+    'pose': _POSE_INFORMATION
 }
 
 # Default file pattern of TFRecord of TensorFlow Example.
@@ -148,7 +176,7 @@ def get_dataset(dataset_name, split_name, dataset_dir):
   # Prepare the variables for different datasets.
   num_classes = _DATASETS_INFORMATION[dataset_name].num_classes
   ignore_label = _DATASETS_INFORMATION[dataset_name].ignore_label
-
+  background_label = _DATASETS_INFORMATION[dataset_name].background_label
   file_pattern = _FILE_PATTERN
   file_pattern = os.path.join(dataset_dir, file_pattern % split_name)
 
@@ -168,6 +196,7 @@ def get_dataset(dataset_name, split_name, dataset_dir):
           (), tf.string, default_value=''),
       'image/segmentation/class/format': tf.FixedLenFeature(
           (), tf.string, default_value='png'),
+      'image/segmentation/class/labels_multichannel': tf.FixedLenFeature((FLAGS.num_classes,), tf.string)
   }
   items_to_handlers = {
       'image': tfexample_decoder.Image(
@@ -181,6 +210,11 @@ def get_dataset(dataset_name, split_name, dataset_dir):
           image_key='image/segmentation/class/encoded',
           format_key='image/segmentation/class/format',
           channels=1),
+      'labels_multichannel': tfexample_decoder.Image(
+          image_key='image/segmentation/class/labels_multichannel',
+          format_key='image/segmentation/class/format',
+          channels=1,
+          repeated=True),
   }
 
   decoder = tfexample_decoder.TFExampleDecoder(
@@ -193,6 +227,7 @@ def get_dataset(dataset_name, split_name, dataset_dir):
       num_samples=splits_to_sizes[split_name],
       items_to_descriptions=_ITEMS_TO_DESCRIPTIONS,
       ignore_label=ignore_label,
+      background_label=background_label,
       num_classes=num_classes,
       name=dataset_name,
       multi_label=True)

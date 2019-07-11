@@ -25,6 +25,8 @@ from nets.mobilenet import mobilenet_v2
 
 slim = tf.contrib.slim
 
+FLAGS = tf.app.flags.FLAGS
+
 # Default end point for MobileNetv2.
 _MOBILENET_V2_FINAL_ENDPOINT = 'layer_18'
 
@@ -160,6 +162,7 @@ def _preprocess_zero_mean_unit_range(inputs):
   return (2.0 / 255.0) * tf.to_float(inputs) - 1.0
 
 
+
 _PREPROCESS_FN = {
     'mobilenet_v2': _preprocess_zero_mean_unit_range,
     'resnet_v1_50': _preprocess_subtract_imagenet_mean,
@@ -207,6 +210,8 @@ def extract_features(images,
                      reuse=None,
                      is_training=False,
                      fine_tune_batch_norm=False,
+                     batch_norm_decay=0.9997,
+                     batch_norm_epsilon=0.00001,
                      regularize_depthwise=False,
                      preprocess_images=True,
                      num_classes=None,
@@ -265,8 +270,8 @@ def extract_features(images,
   elif 'xception' in model_variant:
     arg_scope = arg_scopes_map[model_variant](
         weight_decay=weight_decay,
-        batch_norm_decay=0.9997,
-        batch_norm_epsilon=1e-3,
+        batch_norm_decay=batch_norm_decay,
+        batch_norm_epsilon=batch_norm_epsilon, #was by mistake 1e-8 when sticks first appeared. probably that is not important, but remember to check if something goes wrong
         batch_norm_scale=True,
         regularize_depthwise=regularize_depthwise)
     features, end_points = get_network(
@@ -283,7 +288,9 @@ def extract_features(images,
   elif 'mobilenet' in model_variant:
     arg_scope = arg_scopes_map[model_variant](
         is_training=(is_training and fine_tune_batch_norm),
-        weight_decay=weight_decay)
+        weight_decay=weight_decay,
+        bn_decay=batch_norm_decay,
+        bn_epsilon=batch_norm_epsilon)
     features, end_points = get_network(
         model_variant, preprocess_images, arg_scope)(
             inputs=images,
@@ -318,7 +325,7 @@ def get_network(network_name, preprocess_images, arg_scope=None):
   arg_scope = arg_scope or arg_scopes_map[network_name]()
   def _identity_function(inputs):
     return inputs
-  if preprocess_images:
+  if preprocess_images and not FLAGS.input_floats:
     preprocess_function = _PREPROCESS_FN[network_name]
   else:
     preprocess_function = _identity_function

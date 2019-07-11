@@ -16,8 +16,10 @@
 """Utility functions related to preprocessing inputs."""
 import tensorflow as tf
 
+FLAGS = tf.app.flags.FLAGS
 
-def flip_dim(tensor_list, prob=0.5, dim=1):
+
+def flip_dim(tensor_list, prob=0.5, dim=1, left_labels=None, right_labels=None):
   """Randomly flips a dimension of the given tensor.
 
   The decision to randomly flip the `Tensors` is made together. In other words,
@@ -48,12 +50,41 @@ def flip_dim(tensor_list, prob=0.5, dim=1):
       if dim < 0 or dim >= len(tensor.get_shape().as_list()):
         raise ValueError('dim must represent a valid dimension.')
       flipped.append(tf.reverse_v2(tensor, [dim]))
+
+
+    if left_labels is not None and right_labels is not None:
+      diff = tf.fill(tf.shape(flipped[1]), 0)
+      for i in range(len(left_labels)):
+        label_diff = tf.fill(tf.shape(flipped[1]), right_labels[i] - left_labels[i])
+        diff = tf.where(tf.equal(flipped[1], left_labels[i]), label_diff, diff)
+        label_diff = tf.fill(tf.shape(flipped[1]), left_labels[i] - right_labels[i])
+        diff = tf.where(tf.equal(flipped[1], right_labels[i]), label_diff, diff)
+      flipped[1] += diff
+
+      if len(flipped) >=3:
+        #split channels
+        channels = tf.split(flipped[2], FLAGS.num_classes, axis=2)
+        reordered = []
+        for label_id in range(FLAGS.num_classes):
+          channel = label_id
+          for switch_label_index in range(len(left_labels)):
+            if channel == left_labels[switch_label_index]:
+              channel = right_labels[switch_label_index]
+              break
+            elif channel == right_labels[switch_label_index]:
+              channel = left_labels[switch_label_index]
+              break
+          reordered.append(channels[channel])
+        #merge channels in different order
+        flipped[2] = tf.concat(reordered, axis=2)
+
     return flipped
 
   is_flipped = tf.less_equal(random_value, prob)
   outputs = tf.cond(is_flipped, flip, lambda: tensor_list)
   if not isinstance(outputs, (list, tuple)):
     outputs = [outputs]
+
   outputs.append(is_flipped)
 
   return outputs
@@ -443,3 +474,26 @@ def resize_to_range(image,
     else:
       new_tensor_list.append(None)
     return new_tensor_list
+
+def gaussian_kernel(size, mean, std):
+    d = tf.distributions.Normal(mean, std)
+    vals = d.prob(tf.range(start = -size, limit = size + 1, dtype = tf.float32))
+    gauss_kernel = tf.einsum('i,j->ij', vals, vals)
+    gauss_kernel =  gauss_kernel / tf.reduce_sum(gauss_kernel)
+    gauss_kernel = gauss_kernel[:,:,tf.newaxis, tf.newaxis]
+    return gauss_kernel
+
+
+def gaussian_blur(gauss_image):
+    gauss_kernel = gaussian_kernel(3, 127.5, 127.5)
+    gauss_image = tf.expand_dims(gauss_image,0)
+    r,g,b = tf.split(gauss_image,3,3)
+    r = tf.nn.conv2d(r, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    g = tf.nn.conv2d(g, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    b = tf.nn.conv2d(b, gauss_kernel, strides=[1,1,1,1], padding='SAME')
+    r = tf.squeeze(r,3)
+    g = tf.squeeze(g,3)
+    b = tf.squeeze(b,3)
+    gauss_image = tf.stack([r,g,b],3)
+    gauss_image = tf.squeeze(gauss_image, 0)
+    return gauss_image

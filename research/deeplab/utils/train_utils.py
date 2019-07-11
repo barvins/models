@@ -21,6 +21,8 @@ from deeplab.core import preprocess_utils
 
 slim = tf.contrib.slim
 
+NEAREST_NEIGBOR_FOR_UPSAMPLING = True
+
 
 def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
                                                   labels,
@@ -28,7 +30,8 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
                                                   ignore_label,
                                                   loss_weight=1.0,
                                                   upsample_logits=True,
-                                                  scope=None):
+                                                  scope=None,
+                                                  labels_multichannel=None):
   """Adds softmax cross entropy loss for logits of each scale.
 
   Args:
@@ -44,6 +47,9 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
   Raises:
     ValueError: Label or logits is None.
   """
+
+  #labels_multichannel = tf.Print(labels_multichannel, [labels_multichannel], "labels_multi")
+
   if labels is None:
     raise ValueError('No label for softmax cross entropy loss.')
 
@@ -54,7 +60,13 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
 
     if upsample_logits:
       # Label is not downsampled, and instead we upsample logits.
-      logits = tf.image.resize_bilinear(
+      if NEAREST_NEIGBOR_FOR_UPSAMPLING:
+        logits = tf.image.resize_nearest_neighbor(
+          logits,
+          preprocess_utils.resolve_shape(labels, 4)[1:3],
+          align_corners=True)
+      else:
+        logits = tf.image.resize_bilinear(
           logits,
           preprocess_utils.resolve_shape(labels, 4)[1:3],
           align_corners=True)
@@ -67,15 +79,24 @@ def add_softmax_cross_entropy_loss_for_each_scale(scales_to_logits,
           align_corners=True)
 
     scaled_labels = tf.reshape(scaled_labels, shape=[-1])
-    not_ignore_mask = tf.to_float(tf.not_equal(scaled_labels,
-                                               ignore_label)) * loss_weight
-    one_hot_labels = slim.one_hot_encoding(
-        scaled_labels, num_classes, on_value=1.0, off_value=0.0)
-    tf.losses.softmax_cross_entropy(
-        one_hot_labels,
-        tf.reshape(logits, shape=[-1, num_classes]),
-        weights=not_ignore_mask,
+    not_ignore_mask = tf.to_float(tf.not_equal(scaled_labels, ignore_label)) * loss_weight
+
+#TODO: clean up, so that it works also the old way without multiclass
+
+    tf.losses.sigmoid_cross_entropy(
+        tf.reshape(labels_multichannel, shape=[tf.shape(labels)[0],-1, num_classes]),
+        tf.reshape(logits, shape=[tf.shape(labels)[0],-1, num_classes]),
+        weights=1.0, #not_ignore_mask,
         scope=loss_scope)
+
+
+#    one_hot_labels = slim.one_hot_encoding(scaled_labels, num_classes, on_value=1.0, off_value=0.0) if labels_multichannel is None else tf.reshape(labels_multichannel, shape=[-1, num_classes])
+#
+#    tf.losses.softmax_cross_entropy(
+#        one_hot_labels,
+#        tf.reshape(logits, shape=[-1, num_classes]),
+#        weights=not_ignore_mask,
+#        scope=loss_scope)
 
 
 def get_model_init_fn(train_logdir,

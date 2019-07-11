@@ -32,7 +32,7 @@ flags.DEFINE_string('checkpoint_path', None, 'Checkpoint path')
 flags.DEFINE_string('export_path', None,
                     'Path to output Tensorflow frozen graph.')
 
-flags.DEFINE_integer('num_classes', 21, 'Number of classes.')
+#flags.DEFINE_integer('num_classes', 21, 'Number of classes.')
 
 flags.DEFINE_multi_integer('crop_size', [513, 513],
                            'Crop size [height, width].')
@@ -53,11 +53,22 @@ flags.DEFINE_multi_float('inference_scales', [1.0],
 flags.DEFINE_bool('add_flipped_images', False,
                   'Add flipped images during inference or not.')
 
+flags.DEFINE_bool('skip_preprocess', False,
+                  'Skip preprocess step.')
+
+flags.DEFINE_bool('skip_segment_resize_to_original_size', False,
+                  'Skip preprocess step.')
+
+flags.DEFINE_string('output_layer', 'SemanticPredictions',
+                  'Name of output layer')
+
+flags.DEFINE_bool('add_heatmap_output', False,
+                  'Add heatmap output that contains probabilities from 0 to 1 for each pixel(block) for each class.')
+
+
+
 # Input name of the exported model.
 _INPUT_NAME = 'ImageTensor'
-
-# Output name of the exported model.
-_OUTPUT_NAME = 'SemanticPredictions'
 
 
 def _create_input_tensors():
@@ -74,27 +85,36 @@ def _create_input_tensors():
     resized_image_size: Resized image shape tensor [height, width].
   """
   # input_preprocess takes 4-D image tensor as input.
-  input_image = tf.placeholder(tf.uint8, [1, None, None, 3], name=_INPUT_NAME)
+  if FLAGS.input_floats:
+    input_image = tf.placeholder(tf.float32, [1, FLAGS.crop_size[0], FLAGS.crop_size[1], 3], name=_INPUT_NAME)
+  else:
+    input_image = tf.placeholder(tf.uint8, [1, FLAGS.crop_size[0], FLAGS.crop_size[1], 3], name=_INPUT_NAME)
+
   original_image_size = tf.shape(input_image)[1:3]
 
-  # Squeeze the dimension in axis=0 since `preprocess_image_and_label` assumes
-  # image to be 3-D.
-  image = tf.squeeze(input_image, axis=0)
-  resized_image, image, _ = input_preprocess.preprocess_image_and_label(
-      image,
-      label=None,
-      crop_height=FLAGS.crop_size[0],
-      crop_width=FLAGS.crop_size[1],
-      min_resize_value=FLAGS.min_resize_value,
-      max_resize_value=FLAGS.max_resize_value,
-      resize_factor=FLAGS.resize_factor,
-      is_training=False,
-      model_variant=FLAGS.model_variant)
-  resized_image_size = tf.shape(resized_image)[:2]
+  if not FLAGS.skip_preprocess:
+    # Squeeze the dimension in axis=0 since `preprocess_image_and_label` assumes
+    # image to be 3-D.
+    image = tf.squeeze(input_image, axis=0)
+    resized_image, image, _ = input_preprocess.preprocess_image_and_label(
+        image,
+        label=None,
+        crop_height=FLAGS.crop_size[0],
+        crop_width=FLAGS.crop_size[1],
+        min_resize_value=FLAGS.min_resize_value,
+        max_resize_value=FLAGS.max_resize_value,
+        resize_factor=FLAGS.resize_factor,
+        is_training=False,
+        model_variant=FLAGS.model_variant)
+    resized_image_size = tf.shape(resized_image)[:2]
 
-  # Expand the dimension in axis=0, since the following operations assume the
-  # image to be 4-D.
-  image = tf.expand_dims(image, 0)
+    # Expand the dimension in axis=0, since the following operations assume the
+    # image to be 4-D.
+    image = tf.expand_dims(image, 0)
+  else:
+    print("skipping preprocess")
+    image = input_image
+    resized_image_size = original_image_size
 
   return image, original_image_size, resized_image_size
 
@@ -126,12 +146,27 @@ def main(unused_argv):
           eval_scales=FLAGS.inference_scales,
           add_flipped_images=FLAGS.add_flipped_images)
 
-    predictions = tf.cast(predictions[common.OUTPUT_TYPE], tf.float32)
+    #slice won't work in tflite
+    #it seems that slicing is not necessary if image width and height can be
+    #divided by atrous_rate (18) or output_stride (16)
+    #not sure which one is the culprit, but size 288 works for both and is not far from original 300
+
+
+    #predictions = tf.cast(predictions[common.OUTPUT_TYPE], tf.float32)
+
+    #semantic_predictions = tf.cast(predictions[common.OUTPUT_TYPE], tf.uint8)
+    #semantic_predictions = predictions[common.OUTPUT_TYPE] #tf.cast(predictions[common.OUTPUT_TYPE], tf.uint8)
+
+    semantic_predictions = predictions[common.OUTPUT_TYPE]
+
+
     # Crop the valid regions from the predictions.
-    semantic_predictions = tf.slice(
-        predictions,
-        [0, 0, 0],
-        [1, resized_image_size[0], resized_image_size[1]])
+#    semantic_predictions = tf.slice(
+#        predictions,
+#        [0, 0, 0],
+#        [1, resized_image_size[0], resized_image_size[1]])
+#    semantic_predictions = predictions
+
     # Resize back the prediction to the original image size.
     def _resize_label(label, label_size):
       # Expand dimension of label to [1, height, width, 1] for resize operation.
@@ -142,17 +177,33 @@ def main(unused_argv):
           method=tf.image.ResizeMethod.NEAREST_NEIGHBOR,
           align_corners=True)
       return tf.cast(tf.squeeze(resized_label, 3), tf.int32)
-    semantic_predictions = _resize_label(semantic_predictions, image_size)
-    semantic_predictions = tf.identity(semantic_predictions, name=_OUTPUT_NAME)
+    #semantic_predictions = _resize_label(semantic_predictions, image_size)
+    if not FLAGS.skip_segment_resize_to_original_size:
+        semantic_predictions = _resize_label(semantic_predictions, image_size)
+    #else:
+    #    semantic_predictions = tf.cast(semantic_predictions, tf.int32)
+
+    if FLAGS.add_heatmap_output:
+      logits_output = tf.get_default_graph().get_tensor_by_name("logits/semantic/BiasAdd:0")
+      heatmap_output = tf.sigmoid(logits_output)
+      heatmap_output = tf.transpose(heatmap_output ,[0,3,1,2]) #nhwc -<nchw
+      heatmap_output = tf.identity(heatmap_output, name="heatmaps")
+
+
+    semantic_predictions = tf.identity(semantic_predictions, name=FLAGS.output_layer)
+
+    if FLAGS.quantize:
+      tf.contrib.quantize.create_eval_graph(tf.get_default_graph())
 
     saver = tf.train.Saver(tf.model_variables())
 
     tf.gfile.MakeDirs(os.path.dirname(FLAGS.export_path))
+
     freeze_graph.freeze_graph_with_def_protos(
         tf.get_default_graph().as_graph_def(add_shapes=True),
         saver.as_saver_def(),
         FLAGS.checkpoint_path,
-        _OUTPUT_NAME,
+        FLAGS.output_layer,
         restore_op_name=None,
         filename_tensor_name=None,
         output_graph=FLAGS.export_path,

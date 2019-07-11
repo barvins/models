@@ -66,6 +66,10 @@ ASPP_SCOPE = 'aspp'
 CONCAT_PROJECTION_SCOPE = 'concat_projection'
 DECODER_SCOPE = 'decoder'
 META_ARCHITECTURE_SCOPE = 'meta_architecture'
+BATCH_NORM_DECAY=.9997
+BATCH_NORM_EPSILON=1e-5
+SCALE=False #disabl scaling (and cast) for tflite
+NEAREST_NEIGHBOR_FOR_UPSAMPLING = True
 
 scale_dimension = utils.scale_dimension
 split_separable_conv2d = utils.split_separable_conv2d
@@ -135,20 +139,36 @@ def predict_labels_multi_scale(images,
 
     for output in sorted(outputs_to_scales_to_logits):
       scales_to_logits = outputs_to_scales_to_logits[output]
-      logits = tf.image.resize_bilinear(
-          scales_to_logits[MERGED_LOGITS_SCOPE],
-          tf.shape(images)[1:3],
-          align_corners=True)
+      if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+        logits = tf.image.resize_nearest_neighbor(
+            scales_to_logits[MERGED_LOGITS_SCOPE],
+            tf.shape(images)[1:3],
+            align_corners=True)
+      else:
+        logits = tf.image.resize_bilinear(
+            scales_to_logits[MERGED_LOGITS_SCOPE],
+            tf.shape(images)[1:3],
+            align_corners=True)
+
+
       outputs_to_predictions[output].append(
           tf.expand_dims(tf.nn.softmax(logits), 4))
 
       if add_flipped_images:
         scales_to_logits_reversed = (
             outputs_to_scales_to_logits_reversed[output])
-        logits_reversed = tf.image.resize_bilinear(
-            tf.reverse_v2(scales_to_logits_reversed[MERGED_LOGITS_SCOPE], [2]),
-            tf.shape(images)[1:3],
-            align_corners=True)
+
+        if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+          logits_reversed = tf.image.resize_nearest_neighbor(
+              tf.reverse_v2(scales_to_logits_reversed[MERGED_LOGITS_SCOPE], [2]),
+              tf.shape(images)[1:3],
+              align_corners=True)
+        else:
+          logits_reversed = tf.image.resize_bilinear(
+              tf.reverse_v2(scales_to_logits_reversed[MERGED_LOGITS_SCOPE], [2]),
+              tf.shape(images)[1:3],
+              align_corners=True)
+
         outputs_to_predictions[output].append(
             tf.expand_dims(tf.nn.softmax(logits_reversed), 4))
 
@@ -156,7 +176,7 @@ def predict_labels_multi_scale(images,
     predictions = outputs_to_predictions[output]
     # Compute average prediction across different scales and flipped images.
     predictions = tf.reduce_mean(tf.concat(predictions, 4), axis=4)
-    outputs_to_predictions[output] = tf.argmax(predictions, 3)
+    outputs_to_predictions[output] = tf.argmax(predictions, 3, output_type=tf.int32)
 
   return outputs_to_predictions
 
@@ -184,11 +204,19 @@ def predict_labels(images, model_options, image_pyramid=None):
   predictions = {}
   for output in sorted(outputs_to_scales_to_logits):
     scales_to_logits = outputs_to_scales_to_logits[output]
-    logits = tf.image.resize_bilinear(
-        scales_to_logits[MERGED_LOGITS_SCOPE],
-        tf.shape(images)[1:3],
-        align_corners=True)
-    predictions[output] = tf.argmax(logits, 3)
+
+    if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+      logits = tf.image.resize_nearest_neighbor(
+          scales_to_logits[MERGED_LOGITS_SCOPE],
+          tf.shape(images)[1:3],
+          align_corners=True)
+    else:
+      logits = tf.image.resize_bilinear(
+          scales_to_logits[MERGED_LOGITS_SCOPE],
+          tf.shape(images)[1:3],
+          align_corners=True)
+
+    predictions[output] = tf.argmax(logits, 3, output_type=tf.int32)
 
   return predictions
 
@@ -205,7 +233,10 @@ def _resize_bilinear(images, size, output_dtype=tf.float32):
     A tensor of size [batch, height_out, width_out, channels] as a dtype of
       output_dtype.
   """
-  images = tf.image.resize_bilinear(images, size, align_corners=True)
+  if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+    images = tf.image.resize_nearest_neighbor(images, size, align_corners=True)
+  else:
+    images = tf.image.resize_bilinear(images, size, align_corners=True)
   return tf.cast(images, dtype=output_dtype)
 
 
@@ -214,7 +245,10 @@ def multi_scale_logits(images,
                        image_pyramid,
                        weight_decay=0.0001,
                        is_training=False,
-                       fine_tune_batch_norm=False):
+                       fine_tune_batch_norm=False,
+                       batch_norm_decay=BATCH_NORM_DECAY,
+                       batch_norm_epsilon=BATCH_NORM_EPSILON,
+                       feature_extractor_batch_norm_decay=BATCH_NORM_DECAY):
   """Gets the logits for multi-scale inputs.
 
   The returned logits are all downsampled (due to max-pooling layers)
@@ -241,6 +275,7 @@ def multi_scale_logits(images,
       add_image_level_feature = True, since add_image_level_feature requires
       crop_size information.
   """
+
   # Setup default values.
   if not image_pyramid:
     image_pyramid = [1.0]
@@ -256,11 +291,11 @@ def multi_scale_logits(images,
       model_options.decoder_output_stride or model_options.output_stride)
 
   logits_height = scale_dimension(
-      crop_height,
-      max(1.0, max(image_pyramid)) / logits_output_stride)
+          crop_height,
+          max(1.0, max(image_pyramid)) / logits_output_stride)
   logits_width = scale_dimension(
-      crop_width,
-      max(1.0, max(image_pyramid)) / logits_output_stride)
+          crop_width,
+          max(1.0, max(image_pyramid)) / logits_output_stride)
 
   # Compute the logits for each scale in the image pyramid.
   outputs_to_scales_to_logits = {
@@ -273,8 +308,13 @@ def multi_scale_logits(images,
       scaled_height = scale_dimension(crop_height, image_scale)
       scaled_width = scale_dimension(crop_width, image_scale)
       scaled_crop_size = [scaled_height, scaled_width]
-      scaled_images = tf.image.resize_bilinear(
+      if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+        scaled_images = tf.image.resize_nearest_neighbor(
           images, scaled_crop_size, align_corners=True)
+      else:
+        scaled_images = tf.image.resize_bilinear(
+          images, scaled_crop_size, align_corners=True)
+
       if model_options.crop_size:
         scaled_images.set_shape([None, scaled_height, scaled_width, 3])
     else:
@@ -288,11 +328,20 @@ def multi_scale_logits(images,
         weight_decay=weight_decay,
         reuse=tf.AUTO_REUSE,
         is_training=is_training,
-        fine_tune_batch_norm=fine_tune_batch_norm)
+        fine_tune_batch_norm=fine_tune_batch_norm,
+        batch_norm_decay=batch_norm_decay,
+        batch_norm_epsilon=batch_norm_epsilon,
+        feature_extractor_batch_norm_decay=feature_extractor_batch_norm_decay)
 
     # Resize the logits to have the same dimension before merging.
     for output in sorted(outputs_to_logits):
-      outputs_to_logits[output] = tf.image.resize_bilinear(
+
+      if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+        outputs_to_logits[output] = tf.image.resize_nearest_neighbor(
+          outputs_to_logits[output], [logits_height, logits_width],
+          align_corners=True)
+      else:
+        outputs_to_logits[output] = tf.image.resize_bilinear(
           outputs_to_logits[output], [logits_height, logits_width],
           align_corners=True)
 
@@ -330,7 +379,9 @@ def extract_features(images,
                      weight_decay=0.0001,
                      reuse=None,
                      is_training=False,
-                     fine_tune_batch_norm=False):
+                     fine_tune_batch_norm=False,
+                     batch_norm_decay=BATCH_NORM_DECAY,
+                     batch_norm_epsilon=BATCH_NORM_EPSILON):
   """Extracts features by the particular model_variant.
 
   Args:
@@ -357,7 +408,9 @@ def extract_features(images,
       weight_decay=weight_decay,
       reuse=reuse,
       is_training=is_training,
-      fine_tune_batch_norm=fine_tune_batch_norm)
+      fine_tune_batch_norm=fine_tune_batch_norm,
+      batch_norm_decay=batch_norm_decay,
+      batch_norm_epsilon=batch_norm_epsilon)
 
   if not model_options.aspp_with_batch_norm:
     return features, end_points
@@ -386,8 +439,8 @@ def extract_features(images,
       # order for backward compatibility.
       batch_norm_params = {
         'is_training': is_training and fine_tune_batch_norm,
-        'decay': 0.9997,
-        'epsilon': 1e-5,
+        'decay': batch_norm_decay,
+        'epsilon': batch_norm_epsilon,
         'scale': True,
       }
 
@@ -431,12 +484,14 @@ def extract_features(images,
                   features, axis=[1, 2], keepdims=True)
               resize_height = pool_height
               resize_width = pool_width
+
             image_feature = slim.conv2d(
                 image_feature, depth, 1, scope=IMAGE_POOLING_SCOPE)
             image_feature = _resize_bilinear(
-                image_feature,
-                [resize_height, resize_width],
-                image_feature.dtype)
+                  image_feature,
+                  [resize_height, resize_width],
+                  image_feature.dtype)
+
             # Set shape for resize_height/resize_width if they are not Tensor.
             if isinstance(resize_height, tf.Tensor):
               resize_height = None
@@ -483,7 +538,10 @@ def _get_logits(images,
                 weight_decay=0.0001,
                 reuse=None,
                 is_training=False,
-                fine_tune_batch_norm=False):
+                fine_tune_batch_norm=False,
+                batch_norm_decay=BATCH_NORM_DECAY,
+                batch_norm_epsilon=BATCH_NORM_EPSILON,
+                feature_extractor_batch_norm_decay=BATCH_NORM_DECAY,):
   """Gets the logits by atrous/image spatial pyramid pooling.
 
   Args:
@@ -503,7 +561,9 @@ def _get_logits(images,
       weight_decay=weight_decay,
       reuse=reuse,
       is_training=is_training,
-      fine_tune_batch_norm=fine_tune_batch_norm)
+      fine_tune_batch_norm=fine_tune_batch_norm,
+      batch_norm_decay=feature_extractor_batch_norm_decay,
+      batch_norm_epsilon=batch_norm_epsilon)
 
   if model_options.decoder_output_stride is not None:
     if model_options.crop_size is None:
@@ -525,7 +585,9 @@ def _get_logits(images,
         weight_decay=weight_decay,
         reuse=reuse,
         is_training=is_training,
-        fine_tune_batch_norm=fine_tune_batch_norm)
+        fine_tune_batch_norm=fine_tune_batch_norm,
+        batch_norm_decay=batch_norm_decay,
+        batch_norm_epsilon=batch_norm_epsilon)
 
   outputs_to_logits = {}
   for output in sorted(model_options.outputs_to_num_classes):
@@ -551,7 +613,9 @@ def refine_by_decoder(features,
                       weight_decay=0.0001,
                       reuse=None,
                       is_training=False,
-                      fine_tune_batch_norm=False):
+                      fine_tune_batch_norm=False,
+                      batch_norm_decay=BATCH_NORM_DECAY,
+                      batch_norm_epsilon=BATCH_NORM_EPSILON):
   """Adds the decoder to obtain sharper segmentation results.
 
   Args:
@@ -574,8 +638,8 @@ def refine_by_decoder(features,
   """
   batch_norm_params = {
       'is_training': is_training and fine_tune_batch_norm,
-      'decay': 0.9997,
-      'epsilon': 1e-5,
+      'decay': batch_norm_decay,
+      'epsilon': batch_norm_epsilon,
       'scale': True,
   }
 
@@ -613,8 +677,13 @@ def refine_by_decoder(features,
                     scope='feature_projection' + str(i)))
             # Resize to decoder_height/decoder_width.
             for j, feature in enumerate(decoder_features_list):
-              decoder_features_list[j] = tf.image.resize_bilinear(
+              if NEAREST_NEIGHBOR_FOR_UPSAMPLING:
+                decoder_features_list[j] = tf.image.resize_nearest_neighbor(
                   feature, [decoder_height, decoder_width], align_corners=True)
+              else:
+                decoder_features_list[j] = tf.image.resize_bilinear(
+                  feature, [decoder_height, decoder_width], align_corners=True)
+
               h = (None if isinstance(decoder_height, tf.Tensor)
                    else decoder_height)
               w = (None if isinstance(decoder_width, tf.Tensor)
