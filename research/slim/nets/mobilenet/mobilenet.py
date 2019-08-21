@@ -416,7 +416,8 @@ def training_scope(is_training=True,
                    weight_decay=0.00004,
                    stddev=0.09,
                    dropout_keep_prob=0.8,
-                   bn_decay=0.997):
+                   bn_decay=0.997,
+                   bn_epsilon=0.00001):
   """Defines Mobilenet training scope.
 
   Usage:
@@ -445,6 +446,7 @@ def training_scope(is_training=True,
   # model here (for example whether to use bias), modify conv_def instead.
   batch_norm_params = {
       'decay': bn_decay,
+      'epsilon': bn_epsilon,
       'is_training': is_training
   }
   if stddev < 0:
