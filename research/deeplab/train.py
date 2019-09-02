@@ -377,7 +377,8 @@ def main(unused_argv):
 
     startup_delay_steps = FLAGS.task * FLAGS.startup_delay_steps
     for variable in slim.get_model_variables():
-      summaries.add(tf.summary.histogram(variable.op.name, variable))
+      if FLAGS.train_batch_size > 1 or not "variance" in  variable.op.name:
+        summaries.add(tf.summary.histogram(variable.op.name, variable))
 
     with tf.device(config.variables_device()):
       total_loss, grads_and_vars = model_deploy.optimize_clones(
